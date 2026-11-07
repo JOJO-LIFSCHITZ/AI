@@ -1,4 +1,4 @@
-import imaplib, smtplib, email, os, re, requests
+import imaplib, smtplib, email, os, re, time, requests
 from email.message import EmailMessage
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
@@ -20,16 +20,29 @@ def normalize_subject(subject):
         s = new_s
 
 
-def ask_ai(contents):
+def ask_ai(contents, attempts=3):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
-    r = requests.post(
-        url,
-        headers={"x-goog-api-key": API_KEY},
-        json={"contents": contents},
-        timeout=120,
-    )
-    r.raise_for_status()
-    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    payload = {
+        "contents": contents,
+        # Skip extended "thinking" so the reply comes back well within the timeout.
+        "generationConfig": {"thinkingConfig": {"thinkingBudget": 0}},
+    }
+    last_err = None
+    for i in range(attempts):
+        try:
+            r = requests.post(
+                url,
+                headers={"x-goog-api-key": API_KEY},
+                json=payload,
+                timeout=240,
+            )
+            r.raise_for_status()
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e:
+            last_err = e
+            if i < attempts - 1:
+                time.sleep(5)
+    raise last_err
 
 
 def get_body(msg):

@@ -1,7 +1,7 @@
-import imaplib, smtplib, email, os, requests
+import imaplib, smtplib, email, os, re, requests
 from email.message import EmailMessage
 from email.header import decode_header, make_header
-from email.utils import parseaddr
+from email.utils import parseaddr, parsedate_to_datetime
 
 GMAIL = os.environ["GMAIL_ADDRESS"]
 APP_PW = os.environ["GMAIL_APP_PASSWORD"]
@@ -11,12 +11,21 @@ MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 TRIGGER_SUBJECT = "ai"
 
 
-def ask_ai(question):
+def normalize_subject(subject):
+    s = subject.strip()
+    while True:
+        new_s = re.sub(r"^\s*(re|fwd|fw)\s*:\s*", "", s, flags=re.I)
+        if new_s == s:
+            return s.strip().lower()
+        s = new_s
+
+
+def ask_ai(contents):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
     r = requests.post(
         url,
         headers={"x-goog-api-key": API_KEY},
-        json={"contents": [{"parts": [{"text": question}]}]},
+        json={"contents": contents},
         timeout=120,
     )
     r.raise_for_status()
@@ -56,6 +65,51 @@ def find_all_mail_folder(imap):
     return "INBOX"
 
 
+def get_thread_id(imap, num):
+    typ, data = imap.fetch(num, "(X-GM-THRID)")
+    if typ != "OK" or not data or not data[0]:
+        return None
+    text = data[0].decode(errors="replace") if isinstance(data[0], bytes) else str(data[0])
+    match = re.search(r"X-GM-THRID\s+(\d+)", text)
+    return match.group(1) if match else None
+
+
+def fetch_thread_messages(imap, thrid):
+    """All messages (sent + received) in this Gmail thread, oldest first."""
+    typ, data = imap.search(None, "X-GM-THRID", thrid)
+    if typ != "OK" or not data or not data[0]:
+        return []
+    out = []
+    for num in data[0].split():
+        _, msgdata = imap.fetch(num, "(BODY.PEEK[])")
+        msg = email.message_from_bytes(msgdata[0][1])
+        try:
+            date = parsedate_to_datetime(msg.get("Date"))
+        except Exception:
+            date = None
+        out.append((date, msg))
+    out.sort(key=lambda t: (t[0] is None, t[0]))
+    return [m for _, m in out]
+
+
+def build_conversation(thread_msgs, sender_addr):
+    """Turn the thread into Gemini-style alternating user/model turns."""
+    contents = []
+    for msg in thread_msgs:
+        frm = parseaddr(msg["From"])[1].lower()
+        body = get_body(msg).strip()
+        if not body:
+            continue
+        if frm == GMAIL.lower():
+            role = "model"
+        elif frm == sender_addr:
+            role = "user"
+        else:
+            continue
+        contents.append({"role": role, "parts": [{"text": body}]})
+    return contents
+
+
 def main():
     imap = imaplib.IMAP4_SSL("imap.gmail.com")
     imap.login(GMAIL, APP_PW)
@@ -69,18 +123,29 @@ def main():
             _, msgdata = imap.fetch(num, "(BODY.PEEK[])")
             msg = email.message_from_bytes(msgdata[0][1])
             sender = parseaddr(msg["From"])[1].lower()
-            subject = str(make_header(decode_header(msg.get("Subject", "")))).strip()
-            if sender != sender_addr or subject.lower() != TRIGGER_SUBJECT:
+            raw_subject = str(make_header(decode_header(msg.get("Subject", "")))).strip()
+            if sender != sender_addr or normalize_subject(raw_subject) != TRIGGER_SUBJECT:
                 continue
-            question = get_body(msg).strip()
+
             imap.store(num, "+FLAGS", "\\Seen")
-            if not question:
+
+            # Thread-aware: replies continue the conversation, a fresh "AI" email starts a new one.
+            thrid = get_thread_id(imap, num)
+            if thrid:
+                thread_msgs = fetch_thread_messages(imap, thrid)
+                contents = build_conversation(thread_msgs, sender_addr)
+            else:
+                body = get_body(msg).strip()
+                contents = [{"role": "user", "parts": [{"text": body}]}] if body else []
+
+            if not contents or contents[-1]["role"] != "user":
                 continue
+
             try:
-                answer = ask_ai(question)
+                answer = ask_ai(contents)
             except Exception as e:
                 answer = f"שגיאה בקבלת תשובה: {type(e).__name__}"
-            send_reply(sender, subject, answer, msg.get("Message-ID"))
+            send_reply(sender, raw_subject, answer, msg.get("Message-ID"))
     imap.logout()
 
 

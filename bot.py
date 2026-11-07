@@ -46,10 +46,20 @@ def send_reply(to, subject, body, msgid):
         s.send_message(m)
 
 
+def find_all_mail_folder(imap):
+    """Gmail 'All Mail' folder (works in any UI language). Falls back to INBOX."""
+    _, folders = imap.list()
+    for f in folders or []:
+        line = f.decode(errors="replace")
+        if "\\All" in line:
+            return line.rsplit(' "/" ', 1)[-1]
+    return "INBOX"
+
+
 def main():
     imap = imaplib.IMAP4_SSL("imap.gmail.com")
     imap.login(GMAIL, APP_PW)
-    imap.select("INBOX")
+    imap.select(find_all_mail_folder(imap))
     for sender_addr in ALLOWED:
         _, data = imap.search(
             None, "UNSEEN", "FROM", f'"{sender_addr}"', "SUBJECT", '"AI"'

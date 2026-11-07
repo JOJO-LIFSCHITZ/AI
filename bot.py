@@ -7,7 +7,7 @@ GMAIL = os.environ["GMAIL_ADDRESS"]
 APP_PW = os.environ["GMAIL_APP_PASSWORD"]
 ALLOWED = [a.strip().lower() for a in os.environ["ALLOWED_SENDERS"].split(",") if a.strip()]
 API_KEY = os.environ["GEMINI_API_KEY"]
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 TRIGGER_SUBJECT = "ai"
 
 

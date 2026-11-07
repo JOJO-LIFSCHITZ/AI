@@ -1,4 +1,5 @@
 import imaplib, smtplib, email, os, re, time, requests
+import re
 from email.message import EmailMessage
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
@@ -47,12 +48,30 @@ def ask_ai(contents, attempts=3):
 
 
 def get_body(msg):
+    html_body = ""
     parts = msg.walk() if msg.is_multipart() else [msg]
     for p in parts:
-        if p.get_content_type() == "text/plain" and not p.get_filename():
-            data = p.get_payload(decode=True) or b""
-            text = data.decode(p.get_content_charset() or "utf-8", errors="replace")
-            return "\n".join(l for l in text.splitlines() if not l.startswith(">"))
+        content_type = p.get_content_type()
+        if not p.get_filename():
+            try:
+                data = p.get_payload(decode=True) or b""
+                text = data.decode(p.get_content_charset() or "utf-8", errors="replace")
+            except Exception:
+                continue
+            
+            if content_type == "text/plain":
+                lines = [l for l in text.splitlines() if not l.startswith(">")]
+                if not lines:
+                    lines = text.splitlines()
+                return "\n".join(lines).strip()
+            elif content_type == "text/html":
+                html_body = text
+
+    # אם נמצא רק HTML, נסיר את התגים בצורה בסיסית
+    if html_body:
+        clean_text = re.sub(r'<[^>]+>', '', html_body)
+        return clean_text.strip()
+        
     return ""
 
 

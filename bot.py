@@ -134,12 +134,21 @@ def build_conversation(thread_msgs, sender_addr):
         body = get_body(msg).strip()
         if not body:
             continue
-        if frm == GMAIL.lower():
-            role = "model"
-        elif frm == sender_addr:
-            role = "user"
+        
+        raw_subj = str(make_header(decode_header(msg.get("Subject", "")))).strip()
+        is_reply = raw_subj.lower().startswith("re:") or msg.get("In-Reply-To")
+        
+        # אם הבוט והשולח הם אותה כתובת, נבדיל לפי האם זו תשובה (Re:) או הודעה חדשה
+        if GMAIL.lower() == sender_addr:
+            role = "model" if is_reply else "user"
         else:
-            continue
+            if frm == GMAIL.lower():
+                role = "model"
+            elif frm == sender_addr:
+                role = "user"
+            else:
+                continue
+                
         contents.append({"role": role, "parts": [{"text": body}]})
     return contents
 

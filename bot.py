@@ -40,6 +40,7 @@ def ask_ai(contents, attempts=3):
             return r.json()["candidates"][0]["content"]["parts"][0]["text"]
         except Exception as e:
             last_err = e
+            print(f"[ask_ai] attempt {i + 1} failed: {type(e).__name__}: {e}")
             if i < attempts - 1:
                 time.sleep(5)
     raise last_err
@@ -66,6 +67,7 @@ def send_reply(to, subject, body, msgid):
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL, APP_PW)
         s.send_message(m)
+    print(f"[send_reply] sent to {to} subject={subject!r}")
 
 
 def find_all_mail_folder(imap):
@@ -124,20 +126,34 @@ def build_conversation(thread_msgs, sender_addr):
 
 
 def main():
+    print(f"[main] allowed senders: {ALLOWED}")
     imap = imaplib.IMAP4_SSL("imap.gmail.com")
     imap.login(GMAIL, APP_PW)
-    imap.select(find_all_mail_folder(imap))
+    folder = find_all_mail_folder(imap)
+    print(f"[main] searching folder: {folder}")
+    imap.select(folder)
+
+    total_candidates = 0
+    total_handled = 0
+
     for sender_addr in ALLOWED:
         _, data = imap.search(
             None, "UNSEEN", "FROM", f'"{sender_addr}"', "SUBJECT", '"AI"'
         )
-        for num in data[0].split():
+        nums = data[0].split()
+        print(f"[main] sender={sender_addr!r}: {len(nums)} unseen candidate(s)")
+        total_candidates += len(nums)
+
+        for num in nums:
             # PEEK: does not mark the mail as read until we decide to
             _, msgdata = imap.fetch(num, "(BODY.PEEK[])")
             msg = email.message_from_bytes(msgdata[0][1])
             sender = parseaddr(msg["From"])[1].lower()
             raw_subject = str(make_header(decode_header(msg.get("Subject", "")))).strip()
+            print(f"[main]   candidate num={num}: from={sender!r} subject={raw_subject!r}")
+
             if sender != sender_addr or normalize_subject(raw_subject) != TRIGGER_SUBJECT:
+                print("[main]   -> skipped (sender/subject mismatch)")
                 continue
 
             imap.store(num, "+FLAGS", "\\Seen")
@@ -152,13 +168,18 @@ def main():
                 contents = [{"role": "user", "parts": [{"text": body}]}] if body else []
 
             if not contents or contents[-1]["role"] != "user":
+                print("[main]   -> skipped (no usable question content)")
                 continue
 
             try:
                 answer = ask_ai(contents)
             except Exception as e:
                 answer = f"שגיאה בקבלת תשובה: {type(e).__name__}"
+                print(f"[main]   -> ask_ai raised: {type(e).__name__}: {e}")
             send_reply(sender, raw_subject, answer, msg.get("Message-ID"))
+            total_handled += 1
+
+    print(f"[main] done. candidates={total_candidates} handled={total_handled}")
     imap.logout()
 
 
